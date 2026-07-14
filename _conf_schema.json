@@ -5,9 +5,12 @@
     "default": "http://127.0.0.1:3000"
   },
   "groups": {
-    "description": "监控的群号列表（JSON 数组，如 [722368954]）",
-    "type": "string",
-    "default": "[722368954]"
+    "description": "监控的群号列表（整数数组，如 [722368954]）",
+    "type": "array",
+    "default": [722368954],
+    "items": {
+      "type": "integer"
+    }
   },
   "initial_delay": {
     "description": "启动后等待秒数再开始轮询（确保其他插件就绪）",

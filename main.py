@@ -28,7 +28,7 @@ from astrbot.api.star import Context, Star, register
 
 DEFAULTS = {
     "napcat_url": "http://127.0.0.1:3000",
-    "groups": "[722368954]",
+    "groups": [722368954],
     "initial_delay": 20,
     "poll_interval": 15,
     "reconnect_poll_interval": 5,
@@ -64,12 +64,12 @@ class RecoveryBridge(Star):
     async def terminate(self):
         if self._task:
             self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
         if self._client:
             await self._client.aclose()
-        try:
-            await self._task
-        except asyncio.CancelledError:
-            pass
 
     # ── 主循环 ───────────────────────────────────────────
 
@@ -142,8 +142,12 @@ class RecoveryBridge(Star):
         """
         基于时间戳检测并恢复遗漏消息。
 
-        不再依赖 message_seq（跨登录会话不稳定），
-        改为拉取最新消息，按时间戳筛选出 last_check 之后的新消息。
+        不依赖 message_seq 做新旧判断（跨登录会话不稳定），
+        但 NapCat 的 get_group_msg_history 仍需 seq 来批量拉取历史。
+        因此恢复流程为：
+          1. 先拉最近 50 条，按时间戳筛选出新消息；
+          2. 重连/明显断层时，再用 seq 批量拉取 last_seq 到最新 seq 之间的消息；
+          3. 所有消息最终按时间戳去重筛选，确保不会注入旧消息。
         """
         gk = str(group_id)
         gs = state.get(gk, {})
@@ -164,16 +168,24 @@ class RecoveryBridge(Star):
         if not recent:
             return False
 
-        # 获取最新消息的 seq（仅用于日志和状态记录）
+        # 获取最新消息的 seq（仅用于日志和批量拉取）
         latest_seq = max((m.get("message_seq", 0) for m in recent), default=0)
+        now_ts = time.time()
 
         # 首次运行：只记录基准
-        last_check_str = gs.get("last_check", "")
-        if not last_check_str:
-            now = datetime.now()
+        last_check_ts = gs.get("last_check_ts")
+        if last_check_ts is None and gs.get("last_check"):
+            # 兼容旧状态：从 ISO 字符串转换
+            try:
+                last_check_ts = datetime.fromisoformat(gs["last_check"]).timestamp()
+            except ValueError:
+                last_check_ts = None
+
+        if last_check_ts is None:
             state[gk] = {
                 "last_seq": latest_seq,
-                "last_check": now.isoformat(),
+                "last_check_ts": now_ts,
+                "last_check": datetime.now().isoformat(),
                 "last_msg_time": recent[0].get("time", 0) if recent else 0,
             }
             self._save_state(state)
@@ -181,28 +193,39 @@ class RecoveryBridge(Star):
                        group_id, latest_seq, len(recent))
             return False
 
-        # 解析上次检查时间
-        try:
-            last_check = datetime.fromisoformat(last_check_str)
-        except ValueError:
-            last_check = datetime.now()
-
         # 按时间筛选新消息
-        new_msgs = []
-        for m in recent:
-            mt = m.get("time", 0)
-            if mt and datetime.fromtimestamp(mt) > last_check:
-                new_msgs.append(m)
+        def filter_new(msgs: list[dict]) -> list[dict]:
+            return [m for m in msgs if m.get("time", 0) and m["time"] > last_check_ts]
+
+        new_msgs = filter_new(recent)
+
+        # 重连或疑似大量遗漏时，批量拉取中间历史
+        last_seq = gs.get("last_seq", 0)
+        need_deep_fetch = was_reconnect and last_seq and last_seq < latest_seq
+        if new_msgs and len(new_msgs) == len(recent):
+            # 最近 N 条全是最新的，可能前面还有遗漏
+            need_deep_fetch = True
+
+        if need_deep_fetch:
+            logger.info("[RecoveryBridge] 群 %s 尝试批量拉取 %s→%s 之间的历史消息",
+                       group_id, last_seq, latest_seq)
+            try:
+                missed = await self._fetch_missed(group_id, last_seq + 1, latest_seq)
+                # 合并、去重、再按时间戳筛选
+                merged = {m.get("message_seq"): m for m in recent + missed
+                          if m.get("message_seq")}
+                new_msgs = filter_new(list(merged.values()))
+            except Exception as e:
+                logger.warning("[RecoveryBridge] 群 %s 批量拉取历史失败: %s", group_id, e)
 
         if not new_msgs:
-            # 无新消息
             state[gk]["last_seq"] = latest_seq
+            state[gk]["last_check_ts"] = now_ts
             state[gk]["last_check"] = datetime.now().isoformat()
+            state[gk]["api_was_down"] = False
             self._save_state(state)
             if was_reconnect:
-                logger.info("[RecoveryBridge] 群 %s 重连后无新消息 (距上次检查 %s)",
-                           group_id,
-                           str(datetime.now() - last_check).split(".")[0])
+                logger.info("[RecoveryBridge] 群 %s 重连后无新消息", group_id)
             return False
 
         # === 检测到新消息 ===
@@ -222,6 +245,7 @@ class RecoveryBridge(Star):
 
         state[gk] = {
             "last_seq": latest_seq,
+            "last_check_ts": now_ts,
             "last_check": datetime.now().isoformat(),
             "api_was_down": False,
             "last_recovery": {
@@ -458,7 +482,10 @@ class RecoveryBridge(Star):
                 if mn.endswith(".utils") and hasattr(mod, "get_persona_id"):
                     get_pid = mod.get_persona_id
             if Message is None:
-                logger.error("[RecoveryBridge] 找不到 Message 类")
+                logger.error(
+                    "[RecoveryBridge] 找不到 Message 类；"
+                    "请确认 LivingMemory 的 conversation_models 模块已加载"
+                )
                 return False
 
             sid = f"aiocqhttp:group:{group_id}"
@@ -528,6 +555,7 @@ class RecoveryBridge(Star):
                 logger.info("[RecoveryBridge] 连接 LivingMemory (mod=%s)", mn)
                 return obj
 
+        logger.debug("[RecoveryBridge] LivingMemory 插件尚未加载或未完成初始化")
         return None
 
     @staticmethod
@@ -542,7 +570,7 @@ class RecoveryBridge(Star):
     # ── 状态持久化 ───────────────────────────────────────
 
     def _state_path(self) -> Path:
-        return Path("D:/AI/cherryagent/temp/napcat_seq_state.json")
+        return Path(__file__).parent / "recovery_state.json"
 
     def _load_state(self) -> dict:
         p = self._state_path()
@@ -562,10 +590,15 @@ class RecoveryBridge(Star):
     # ── 配置解析 ─────────────────────────────────────────
 
     def _parse_groups(self) -> list[int]:
-        raw = self.cfg.get("groups", "[]")
+        raw = self.cfg.get("groups", [])
         if isinstance(raw, list):
-            return [int(g) for g in raw]
-        try:
-            return [int(g) for g in json.loads(raw)]
-        except Exception:
-            return []
+            try:
+                return [int(g) for g in raw]
+            except (ValueError, TypeError):
+                return []
+        if isinstance(raw, str):
+            try:
+                return [int(g) for g in json.loads(raw)]
+            except Exception:
+                return []
+        return []
