@@ -1,0 +1,57 @@
+{
+  "napcat_url": {
+    "description": "NapCat HTTP API 地址（需先在 NapCat WebUI 中开启 HTTP 服务）",
+    "type": "string",
+    "default": "http://127.0.0.1:3000"
+  },
+  "groups": {
+    "description": "监控的群号列表（JSON 数组，如 [722368954]）",
+    "type": "string",
+    "default": "[722368954]"
+  },
+  "initial_delay": {
+    "description": "启动后等待秒数再开始轮询（确保其他插件就绪）",
+    "type": "int",
+    "default": 20,
+    "min": 5,
+    "max": 300
+  },
+  "poll_interval": {
+    "description": "正常轮询间隔秒数",
+    "type": "int",
+    "default": 15,
+    "min": 5,
+    "max": 300
+  },
+  "reconnect_poll_interval": {
+    "description": "NapCat 断连时的快速轮询间隔秒数",
+    "type": "int",
+    "default": 5,
+    "min": 2,
+    "max": 30
+  },
+  "reconnect_sync_delay": {
+    "description": "检测到重连后等待 QQ 同步消息的秒数",
+    "type": "int",
+    "default": 5,
+    "min": 1,
+    "max": 30
+  },
+  "send_forward_card": {
+    "description": "恢复后是否向群聊发送合并转发卡片（可视确认，不影响记忆注入）",
+    "type": "bool",
+    "default": true
+  },
+  "max_forward_nodes": {
+    "description": "合并转发卡片每批最多消息条数",
+    "type": "int",
+    "default": 100,
+    "min": 10,
+    "max": 200
+  },
+  "max_total_for_forward": {
+    "description": "恢复消息超过此数则只发统计通知，不发完整内容",
+    "type": "int",
+    "default": 5000
+  }
+}
