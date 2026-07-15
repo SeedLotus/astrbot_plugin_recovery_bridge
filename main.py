@@ -28,7 +28,7 @@ from astrbot.api.star import Context, Star, register
 
 DEFAULTS = {
     "napcat_url": "http://127.0.0.1:3000",
-    "groups": [722368954],
+    "groups": "[722368954, 397732979]",
     "initial_delay": 20,
     "poll_interval": 15,
     "reconnect_poll_interval": 5,
