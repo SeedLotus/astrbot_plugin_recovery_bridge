@@ -1,5 +1,18 @@
 name: astrbot_plugin_recovery_bridge
-author: cherryclaw
+display_name: RecoveryBridge
+short_desc: NapCat QQ 掉线后自动补齐遗漏的群聊消息，并注入 LivingMemory 长期记忆
+desc: >-
+  NapCat QQ 掉线消息自动恢复，并在重连后将遗漏的群聊历史自动注入 LivingMemory 长期记忆系统。
+  支持多群监控、基于时间戳的精准筛选、合并转发卡片通知，全部参数可在 AstrBot WebUI 中配置。
 version: 2.0.0
-description: NapCat QQ 掉线消息自动恢复，并在重连后将遗漏的群聊历史自动注入 LivingMemory 长期记忆系统
-repo: ""
+author: cherryclaw
+repo: https://github.com/SeedLotus/astrbot_plugin_recovery_bridge
+astrbot_version: ">=4.24.2"
+support_platforms:
+  - aiocqhttp
+social_link: https://github.com/SeedLotus
+tags:
+  - qq
+  - napcat
+  - 消息恢复
+  - 长期记忆
